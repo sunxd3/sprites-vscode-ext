@@ -80,31 +80,45 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         return { spriteName, path };
     }
 
-    // Execute command, return result even if exit code is non-zero
+    // Execute command using spawn (more reliable than exec)
     private async safeExec(sprite: Sprite, command: string): Promise<{stdout: string; stderr: string; exitCode: number}> {
-        try {
+        return new Promise((resolve, reject) => {
             console.log(`Sprite safeExec: running "${command.substring(0, 50)}..."`);
-            const result = await sprite.exec(command);
-            console.log(`Sprite safeExec: success`);
-            return {
-                stdout: toStr(result.stdout),
-                stderr: toStr(result.stderr),
-                exitCode: 0
-            };
-        } catch (error: any) {
-            const stderr = error.stderr ? toStr(error.stderr) : '';
-            console.log(`Sprite safeExec: error - ${error.message}, stderr="${stderr}", exitCode=${error.exitCode}`);
-            // Check if error has stdout/stderr (exec failed but returned output)
-            if (error.stdout !== undefined || error.stderr !== undefined) {
-                return {
-                    stdout: error.stdout ? toStr(error.stdout) : '',
-                    stderr: stderr,
-                    exitCode: error.exitCode || 1
-                };
-            }
-            // Re-throw if it's a connection/websocket error
-            throw error;
-        }
+
+            let stdout = '';
+            let stderr = '';
+
+            const proc = sprite.spawn('bash', ['-c', command], { tty: false });
+
+            proc.stdout?.on('data', (data: Buffer) => {
+                stdout += data.toString();
+            });
+
+            proc.stderr?.on('data', (data: Buffer) => {
+                stderr += data.toString();
+            });
+
+            proc.on('exit', (code: number) => {
+                console.log(`Sprite safeExec: exit code ${code}, stdout="${stdout.substring(0, 100)}"`);
+                resolve({
+                    stdout,
+                    stderr,
+                    exitCode: code || 0
+                });
+            });
+
+            proc.on('error', (err: Error) => {
+                console.log(`Sprite safeExec: error - ${err.message}`);
+                reject(err);
+            });
+
+            // Timeout after 30 seconds
+            setTimeout(() => {
+                console.log('Sprite safeExec: timeout');
+                proc.kill();
+                resolve({ stdout, stderr, exitCode: 124 });
+            }, 30000);
+        });
     }
 
     watch(_uri: vscode.Uri): vscode.Disposable {
