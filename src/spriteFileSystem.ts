@@ -31,23 +31,6 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         }
     }
 
-    // Test exec on a sprite to debug connection issues
-    async testExec(spriteName: string): Promise<void> {
-        const sprite = this.getSprite(spriteName);
-        if (!sprite) {
-            console.log('Sprite test: no sprite');
-            return;
-        }
-        try {
-            console.log('Sprite test: calling exec with "echo hello"');
-            const result = await sprite.exec('echo hello');
-            console.log(`Sprite test: success - stdout="${toStr(result.stdout)}", stderr="${toStr(result.stderr)}"`);
-        } catch (error: any) {
-            console.log(`Sprite test: error - ${error.message}`);
-            console.log(`Sprite test: error object - ${JSON.stringify(error, null, 2)}`);
-        }
-    }
-
     // Wait for client to be ready (with timeout)
     private async waitForClient(timeoutMs: number = 5000): Promise<boolean> {
         if (this.client) return true;
@@ -83,8 +66,6 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
     // Execute command using spawn (more reliable than exec)
     private async safeExec(sprite: Sprite, command: string): Promise<{stdout: string; stderr: string; exitCode: number}> {
         return new Promise((resolve, reject) => {
-            console.log(`Sprite safeExec: running "${command.substring(0, 50)}..."`);
-
             let stdout = '';
             let stderr = '';
 
@@ -99,22 +80,15 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
             });
 
             proc.on('exit', (code: number) => {
-                console.log(`Sprite safeExec: exit code ${code}, stdout="${stdout.substring(0, 100)}"`);
-                resolve({
-                    stdout,
-                    stderr,
-                    exitCode: code || 0
-                });
+                resolve({ stdout, stderr, exitCode: code || 0 });
             });
 
             proc.on('error', (err: Error) => {
-                console.log(`Sprite safeExec: error - ${err.message}`);
                 reject(err);
             });
 
             // Timeout after 30 seconds
             setTimeout(() => {
-                console.log('Sprite safeExec: timeout');
                 proc.kill();
                 resolve({ stdout, stderr, exitCode: 124 });
             }, 30000);
@@ -126,7 +100,6 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
     }
 
     async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
-        console.log(`Sprite stat: uri="${uri.toString()}", authority="${uri.authority}", path="${uri.path}"`);
         const { spriteName, path } = this.parseUri(uri);
 
         // Wait for client to be ready before giving up
@@ -137,18 +110,13 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
         const sprite = this.getSprite(spriteName);
 
         if (!sprite) {
-            // Not connected - token not set
-            console.log(`Sprite stat: no sprite found for "${spriteName}"`);
             throw vscode.FileSystemError.FileNotFound(uri);
         }
 
         try {
-            // Use test + stat to avoid errors on missing files
-            console.log(`Sprite stat: executing command for "${path}"`);
             const result = await this.safeExec(sprite,
                 `if [ -e "${path}" ]; then stat -c '%F|%s|%Y|%X' "${path}"; else echo "NOTFOUND"; fi`
             );
-            console.log(`Sprite stat: result for "${path}" - stdout="${result.stdout.trim()}", exitCode=${result.exitCode}`);
             const output = result.stdout.trim();
 
             if (output === 'NOTFOUND' || !output) {
@@ -171,11 +139,9 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
             return { type, ctime, mtime, size };
         } catch (error: any) {
-            console.log(`Sprite stat: caught error for "${path}" - ${error.message}`);
             if (error instanceof vscode.FileSystemError) {
                 throw error;
             }
-            console.error(`stat failed for ${uri.toString()}:`, error);
             throw vscode.FileSystemError.Unavailable(`Failed to stat ${path}: ${error.message}`);
         }
     }

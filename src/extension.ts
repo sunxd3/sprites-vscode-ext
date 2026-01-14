@@ -100,14 +100,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Test exec before adding workspace folder
-            console.log(`Sprite: testing exec on "${selected.sprite.name}"`);
-            await spriteFs.testExec(selected.sprite.name);
-
-            const uriString = `sprite://${selected.sprite.name}${path}`;
-            console.log(`Sprite: constructing URI - sprite.name="${selected.sprite.name}", path="${path}", full="${uriString}"`);
-            const uri = vscode.Uri.parse(uriString);
-            console.log(`Sprite: parsed URI - scheme="${uri.scheme}", authority="${uri.authority}", path="${uri.path}"`);
+            const uri = vscode.Uri.parse(`sprite://${selected.sprite.name}${path}`);
 
             const workspaceFolders = vscode.workspace.workspaceFolders || [];
             vscode.workspace.updateWorkspaceFolders(
