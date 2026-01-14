@@ -2,42 +2,22 @@
   "name": "vscode-sprite",
   "displayName": "Sprite",
   "description": "Browse and edit files on Sprites.dev sandboxes directly from VS Code",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "sprite",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": ["Other"],
-  "activationEvents": [
-    "*"
-  ],
-  "main": "./out/extension.js",
+  "activationEvents": ["*"],
+  "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "sprite.setToken",
-        "title": "Sprite: Set API Token"
-      },
-      {
-        "command": "sprite.openSprite",
-        "title": "Sprite: Open Sprite"
-      },
-      {
-        "command": "sprite.createSprite",
-        "title": "Sprite: Create Sprite"
-      },
-      {
-        "command": "sprite.openTerminal",
-        "title": "Sprite: Open Terminal"
-      },
-      {
-        "command": "sprite.deleteSprite",
-        "title": "Sprite: Delete Sprite"
-      },
-      {
-        "command": "sprite.refresh",
-        "title": "Sprite: Refresh Files"
-      }
+      { "command": "sprite.setToken", "title": "Sprite: Set API Token" },
+      { "command": "sprite.openSprite", "title": "Sprite: Open Sprite" },
+      { "command": "sprite.createSprite", "title": "Sprite: Create Sprite" },
+      { "command": "sprite.openTerminal", "title": "Sprite: Open Terminal" },
+      { "command": "sprite.deleteSprite", "title": "Sprite: Delete Sprite" },
+      { "command": "sprite.refresh", "title": "Sprite: Refresh Files" }
     ],
     "menus": {
       "commandPalette": [
@@ -51,14 +31,15 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile"
+    "vscode:prepublish": "npm run build",
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run build -- --watch",
+    "compile": "tsc -p ./"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "esbuild": "^0.27.2",
     "typescript": "^5.3.0"
   },
   "dependencies": {

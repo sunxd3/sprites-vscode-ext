@@ -1,22 +1,10 @@
 import * as vscode from 'vscode';
+import { SpritesClient } from '@fly/sprites';
+import { SpriteFileSystemProvider } from './spriteFileSystem';
 
-let SpritesClient: any;
-let globalClient: any = null;
-let spriteFs: any;
-
-async function loadSDK() {
-    if (!SpritesClient) {
-        try {
-            const sdk = await import('@fly/sprites');
-            SpritesClient = sdk.SpritesClient;
-            const { SpriteFileSystemProvider } = await import('./spriteFileSystem');
-            spriteFs = new SpriteFileSystemProvider();
-        } catch (error: any) {
-            vscode.window.showErrorMessage(`Failed to load Sprites SDK: ${error.message}`);
-            throw error;
-        }
-    }
-}
+let globalClient: SpritesClient | null = null;
+let spriteFs: SpriteFileSystemProvider | null = null;
+let fsRegistered = false;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Sprite extension is now active');
@@ -32,17 +20,21 @@ export function activate(context: vscode.ExtensionContext) {
         if (token) {
             await context.secrets.store('spriteToken', token);
             try {
-                await loadSDK();
                 globalClient = new SpritesClient(token);
+                if (!spriteFs) {
+                    spriteFs = new SpriteFileSystemProvider();
+                }
                 spriteFs.setClient(globalClient);
 
-                // Register filesystem provider if not already
-                context.subscriptions.push(
-                    vscode.workspace.registerFileSystemProvider('sprite', spriteFs, {
-                        isCaseSensitive: true,
-                        isReadonly: false
-                    })
-                );
+                if (!fsRegistered) {
+                    context.subscriptions.push(
+                        vscode.workspace.registerFileSystemProvider('sprite', spriteFs, {
+                            isCaseSensitive: true,
+                            isReadonly: false
+                        })
+                    );
+                    fsRegistered = true;
+                }
 
                 vscode.window.showInformationMessage('Sprite API token saved');
             } catch (error: any) {
@@ -51,7 +43,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Command: Open Sprite (add as workspace folder)
+    // Command: Open Sprite
     const openSprite = vscode.commands.registerCommand('sprite.openSprite', async () => {
         if (!globalClient) {
             const setNow = await vscode.window.showErrorMessage(
@@ -138,7 +130,7 @@ export function activate(context: vscode.ExtensionContext) {
                 title: `Creating sprite: ${name}`,
                 cancellable: false
             }, async () => {
-                await globalClient.createSprite(name);
+                await globalClient!.createSprite(name);
             });
 
             const open = await vscode.window.showInformationMessage(
@@ -193,7 +185,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const sprite = globalClient.sprite(spriteName);
-
         const writeEmitter = new vscode.EventEmitter<string>();
         let shellCmd: any;
 
@@ -309,12 +300,12 @@ export function activate(context: vscode.ExtensionContext) {
         refreshSprite
     );
 
-    // Try to restore token on startup
+    // Restore token on startup
     context.secrets.get('spriteToken').then(async token => {
         if (token) {
             try {
-                await loadSDK();
                 globalClient = new SpritesClient(token);
+                spriteFs = new SpriteFileSystemProvider();
                 spriteFs.setClient(globalClient);
                 context.subscriptions.push(
                     vscode.workspace.registerFileSystemProvider('sprite', spriteFs, {
@@ -322,8 +313,9 @@ export function activate(context: vscode.ExtensionContext) {
                         isReadonly: false
                     })
                 );
+                fsRegistered = true;
             } catch (e) {
-                // SDK load failed, user will need to set token again
+                // Token restore failed silently
             }
         }
     });
