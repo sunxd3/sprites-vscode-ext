@@ -8,13 +8,40 @@ function toStr(value: string | Buffer): string {
 export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
     private client: SpritesClient | null = null;
     private spriteCache: Map<string, Sprite> = new Map();
+    private clientReadyPromise: Promise<void> | null = null;
+    private clientReadyResolve: (() => void) | null = null;
 
     private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
     readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> = this._emitter.event;
 
+    constructor() {
+        // Create a promise that resolves when client is set
+        this.clientReadyPromise = new Promise((resolve) => {
+            this.clientReadyResolve = resolve;
+        });
+    }
+
     setClient(client: SpritesClient) {
         this.client = client;
         this.spriteCache.clear();
+        // Signal that client is ready
+        if (this.clientReadyResolve) {
+            this.clientReadyResolve();
+            this.clientReadyResolve = null;
+        }
+    }
+
+    // Wait for client to be ready (with timeout)
+    private async waitForClient(timeoutMs: number = 5000): Promise<boolean> {
+        if (this.client) return true;
+        if (!this.clientReadyPromise) return false;
+
+        const timeout = new Promise<boolean>((resolve) =>
+            setTimeout(() => resolve(false), timeoutMs)
+        );
+        const ready = this.clientReadyPromise.then(() => true);
+
+        return Promise.race([ready, timeout]);
     }
 
     private getSprite(spriteName: string): Sprite | null {
@@ -64,11 +91,19 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
     }
 
     async stat(uri: vscode.Uri): Promise<vscode.FileStat> {
+        console.log(`Sprite stat: uri="${uri.toString()}", authority="${uri.authority}", path="${uri.path}"`);
         const { spriteName, path } = this.parseUri(uri);
+
+        // Wait for client to be ready before giving up
+        if (!this.client) {
+            await this.waitForClient();
+        }
+
         const sprite = this.getSprite(spriteName);
 
         if (!sprite) {
-            // Not connected yet - treat as file not found
+            // Not connected - token not set
+            console.log(`Sprite stat: no sprite found for "${spriteName}"`);
             throw vscode.FileSystemError.FileNotFound(uri);
         }
 
@@ -109,6 +144,11 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
     async readDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
         const { spriteName, path } = this.parseUri(uri);
+
+        if (!this.client) {
+            await this.waitForClient();
+        }
+
         const sprite = this.getSprite(spriteName);
 
         if (!sprite) {
@@ -158,6 +198,11 @@ export class SpriteFileSystemProvider implements vscode.FileSystemProvider {
 
     async readFile(uri: vscode.Uri): Promise<Uint8Array> {
         const { spriteName, path } = this.parseUri(uri);
+
+        if (!this.client) {
+            await this.waitForClient();
+        }
+
         const sprite = this.getSprite(spriteName);
 
         if (!sprite) {

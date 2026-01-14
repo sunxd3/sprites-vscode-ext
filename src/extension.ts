@@ -100,7 +100,11 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const uri = vscode.Uri.parse(`sprite://${selected.sprite.name}${path}`);
+            const uriString = `sprite://${selected.sprite.name}${path}`;
+            console.log(`Sprite: constructing URI - sprite.name="${selected.sprite.name}", path="${path}", full="${uriString}"`);
+            const uri = vscode.Uri.parse(uriString);
+            console.log(`Sprite: parsed URI - scheme="${uri.scheme}", authority="${uri.authority}", path="${uri.path}"`);
+
             const workspaceFolders = vscode.workspace.workspaceFolders || [];
             vscode.workspace.updateWorkspaceFolders(
                 workspaceFolders.length,
