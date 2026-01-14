@@ -1,53 +1,35 @@
-# Sprite VS Code Extension
+# Sprites for VS Code
 
 Browse and edit files on [Sprites.dev](https://sprites.dev) sandboxes directly from VS Code.
 
-## What it does
+## Features
 
-This extension provides a **FileSystemProvider** that lets you work with files on remote Sprites as if they were local:
+- **File Explorer Integration**: Browse your Sprite's filesystem directly in VS Code's file explorer
+- **Edit Files**: Open, edit, and save files on your Sprite
+- **Integrated Terminal**: Open a terminal session to your Sprite
+- **Create & Manage Sprites**: Create new Sprites or delete existing ones
 
-- Browse Sprite filesystems in VS Code's explorer
-- Open, edit, and save files directly on the Sprite
-- Create, rename, and delete files/folders
-- Open interactive terminal sessions with full TTY support
-- Create and manage Sprites from VS Code
-
-## How it works
-
-The extension uses the official `@fly/sprites` SDK to communicate with Sprites.dev. Files are read/written via shell commands (`cat`, `base64`, `stat`, `ls`, etc.) tunneled through the SDK's exec API over HTTPS.
-
-URI format: `sprite://sprite-name/path/to/file`
-
-## Setup
+## Getting Started
 
 1. Install the extension
-2. Run `Sprite: Set API Token` and enter your Sprites.dev API token
-3. Run `Sprite: Open Sprite` to add a Sprite as a workspace folder
+2. Run `Sprites: Set API Token` from the Command Palette and enter your Sprites.dev API token
+3. Run `Sprites: Open Sprite` to browse and select a Sprite to open
+4. The Sprite's filesystem will appear in your workspace
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `Sprite: Set API Token` | Configure your Sprites.dev API token |
-| `Sprite: Open Sprite` | Open a Sprite as a workspace folder |
-| `Sprite: Create Sprite` | Create a new Sprite |
-| `Sprite: Open Terminal` | Open an interactive shell on a Sprite |
-| `Sprite: Delete Sprite` | Delete a Sprite |
-| `Sprite: Refresh Files` | Refresh the file explorer |
-
-## Usage
-
-1. Press `Cmd+Shift+P` (Mac) or `Ctrl+Shift+P` (Windows/Linux)
-2. Run `Sprite: Open Sprite`
-3. Select a Sprite and path to open
-4. The Sprite's filesystem appears in VS Code's explorer
-5. Edit files as normal - changes save directly to the Sprite
+| `Sprites: Set API Token` | Configure your Sprites.dev API token |
+| `Sprites: Open Sprite` | Open a Sprite as a workspace folder |
+| `Sprites: Create Sprite` | Create a new Sprite |
+| `Sprites: Open Terminal` | Open an interactive terminal to a Sprite |
+| `Sprites: Delete Sprite` | Delete an existing Sprite |
+| `Sprites: Refresh Files` | Refresh the file explorer |
 
 ## Requirements
 
-- VS Code 1.85.0+
-- Sprites.dev API token
-- Node.js 24+ (for the SDK)
+- A [Sprites.dev](https://sprites.dev) account and API token
 
 ## License
 
