@@ -15,6 +15,9 @@
   "categories": ["Other"],
   "keywords": ["sprite", "sprites", "sandbox", "remote", "fly.io"],
   "activationEvents": ["onFileSystem:sprite"],
+  "capabilities": {
+    "virtualWorkspaces": true
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [

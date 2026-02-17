@@ -1,11 +1,64 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { execFile } from 'child_process';
 import { SpritesClient } from '@fly/sprites';
 import { SpriteFileSystemProvider } from './spriteFileSystem';
 
 let globalClient: SpritesClient | null = null;
 const spriteFs = new SpriteFileSystemProvider();
+let initPromise: Promise<void> | null = null;
+
+/**
+ * Try to extract the API token from the Sprites CLI by running
+ * `sprite api /v1/sprites -v` and parsing the Authorization header from
+ * curl's verbose output. Returns null if CLI isn't installed or not authenticated.
+ */
+async function tryReadCliToken(): Promise<string | null> {
+    return new Promise((resolve) => {
+        execFile('sprite', ['api', '/v1/sprites', '-v'], {
+            timeout: 15000,
+            env: { ...process.env },
+        }, (error, stdout, stderr) => {
+            // The token appears in stderr (curl verbose output) as:
+            // > Authorization: Bearer <token>
+            const combined = (stderr || '') + (stdout || '');
+            const match = combined.match(/Authorization:\s*Bearer\s+(\S+)/i);
+            if (match && match[1]) {
+                resolve(match[1]);
+            } else {
+                resolve(null);
+            }
+        });
+    });
+}
+
+/**
+ * Initialize the client with a token. Validates by calling listAllSprites().
+ * Returns true if successful, false if the token is invalid.
+ */
+async function initClient(token: string): Promise<boolean> {
+    try {
+        const client = new SpritesClient(token);
+        await client.listAllSprites();
+        globalClient = client;
+        spriteFs.setClient(client);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Ensure the client is initialized. Awaits the startup init, then returns
+ * whether globalClient is available. Commands should call this before proceeding.
+ */
+async function ensureClient(): Promise<boolean> {
+    if (globalClient) { return true; }
+    if (initPromise) { await initPromise; }
+    return globalClient !== null;
+}
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Sprite extension is now active');
@@ -18,18 +71,53 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Restore token on startup (async, but provider is already registered)
-    context.secrets.get('spriteToken').then(token => {
-        if (token) {
-            try {
-                globalClient = new SpritesClient(token);
-                spriteFs.setClient(globalClient);
+    // Restore token on startup with proper error handling
+    initPromise = (async () => {
+        // 1. Try VS Code secrets first
+        const savedToken = await context.secrets.get('spriteToken');
+        if (savedToken) {
+            const valid = await initClient(savedToken);
+            if (valid) {
                 console.log('Sprite: Token restored from secrets');
-            } catch (e: any) {
-                console.error('Sprite: Failed to restore token:', e.message);
+                return;
+            }
+            console.warn('Sprite: Saved token is invalid or expired');
+        }
+
+        // 2. Try the CLI as fallback
+        if (!globalClient) {
+            const cliToken = await tryReadCliToken();
+            if (cliToken) {
+                const valid = await initClient(cliToken);
+                if (valid) {
+                    await context.secrets.store('spriteToken', cliToken);
+                    console.log('Sprite: Token restored from CLI');
+                    return;
+                }
             }
         }
-    });
+
+        // 3. If we had a saved token that failed, notify the user
+        if (savedToken && !globalClient) {
+            const action = await vscode.window.showWarningMessage(
+                'Sprite: Saved API token is invalid or expired',
+                'Set New Token'
+            );
+            if (action === 'Set New Token') {
+                vscode.commands.executeCommand('sprite.setToken');
+            }
+        }
+    })();
+
+    // Auto-open terminal if we're in a sprite:// virtual workspace
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders?.length === 1 && folders[0].uri.scheme === 'sprite') {
+        initPromise.then(() => {
+            if (globalClient) {
+                vscode.commands.executeCommand('sprite.openTerminal');
+            }
+        });
+    }
 
     // Command: Set API Token
     const setToken = vscode.commands.registerCommand('sprite.setToken', async () => {
@@ -41,21 +129,25 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (token) {
             await context.secrets.store('spriteToken', token);
-            try {
-                globalClient = new SpritesClient(token);
-                spriteFs.setClient(globalClient);
+            const valid = await initClient(token);
+            if (valid) {
                 vscode.window.showInformationMessage('Sprite API token saved');
-            } catch (error: any) {
-                vscode.window.showErrorMessage(`Error: ${error.message}`);
+            } else {
+                vscode.window.showErrorMessage('Sprite: Token is invalid. Please check your token and try again.');
             }
         }
     });
 
     // Command: Open Sprite
     const openSprite = vscode.commands.registerCommand('sprite.openSprite', async () => {
-        if (!globalClient) {
+        const ready = await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Sprite: Connecting...',
+        }, () => ensureClient());
+
+        if (!ready) {
             const setNow = await vscode.window.showErrorMessage(
-                'Please set API token first',
+                'Sprite: No API token found. Set one or authenticate with the Sprite CLI.',
                 'Set Token'
             );
             if (setNow === 'Set Token') {
@@ -65,7 +157,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         try {
-            const sprites = await globalClient.listAllSprites();
+            const sprites = await globalClient!.listAllSprites();
 
             if (sprites.length === 0) {
                 const create = await vscode.window.showInformationMessage(
@@ -92,26 +184,18 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            const path = await vscode.window.showInputBox({
+            const pathInput = await vscode.window.showInputBox({
                 prompt: 'Enter path to open',
                 value: '/home/sprite',
                 ignoreFocusOut: true
             });
 
-            if (!path) {
+            if (!pathInput) {
                 return;
             }
 
-            const uri = vscode.Uri.parse(`sprite://${selected.sprite.name}${path}`);
-
-            const workspaceFolders = vscode.workspace.workspaceFolders || [];
-            vscode.workspace.updateWorkspaceFolders(
-                workspaceFolders.length,
-                0,
-                { uri, name: `Sprite: ${selected.sprite.name}` }
-            );
-
-            vscode.window.showInformationMessage(`Opened Sprite: ${selected.sprite.name}`);
+            const uri = vscode.Uri.parse(`sprite://${selected.sprite.name}${pathInput}`);
+            await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
         } catch (error: any) {
             vscode.window.showErrorMessage(`Error: ${error.message}`);
         }
@@ -119,8 +203,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command: Create Sprite
     const createSprite = vscode.commands.registerCommand('sprite.createSprite', async () => {
-        if (!globalClient) {
-            vscode.window.showErrorMessage('Please set API token first');
+        const ready = await ensureClient();
+        if (!ready) {
+            vscode.window.showErrorMessage('Sprite: No API token. Use "Sprites: Set API Token" first.');
             return;
         }
 
@@ -149,12 +234,7 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (open === 'Open Sprite') {
                 const uri = vscode.Uri.parse(`sprite://${name}/home/sprite`);
-                const workspaceFolders = vscode.workspace.workspaceFolders || [];
-                vscode.workspace.updateWorkspaceFolders(
-                    workspaceFolders.length,
-                    0,
-                    { uri, name: `Sprite: ${name}` }
-                );
+                await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
             }
         } catch (error: any) {
             vscode.window.showErrorMessage(`Error creating sprite: ${error.message}`);
@@ -163,20 +243,28 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command: Open Terminal
     const openTerminal = vscode.commands.registerCommand('sprite.openTerminal', async () => {
-        if (!globalClient) {
-            vscode.window.showErrorMessage('Please set API token first');
+        const ready = await ensureClient();
+        if (!ready) {
+            vscode.window.showErrorMessage('Sprite: No API token. Use "Sprites: Set API Token" first.');
             return;
         }
 
         let spriteName: string | undefined;
 
-        const activeUri = vscode.window.activeTextEditor?.document.uri;
-        if (activeUri?.scheme === 'sprite') {
-            spriteName = activeUri.authority;
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders?.length === 1 && workspaceFolders[0].uri.scheme === 'sprite') {
+            spriteName = workspaceFolders[0].uri.authority;
         }
 
         if (!spriteName) {
-            const sprites = await globalClient.listAllSprites();
+            const activeUri = vscode.window.activeTextEditor?.document.uri;
+            if (activeUri?.scheme === 'sprite') {
+                spriteName = activeUri.authority;
+            }
+        }
+
+        if (!spriteName) {
+            const sprites = await globalClient!.listAllSprites();
             if (sprites.length === 0) {
                 vscode.window.showInformationMessage('No sprites found');
                 return;
@@ -193,7 +281,7 @@ export function activate(context: vscode.ExtensionContext) {
             spriteName = selected.sprite.name;
         }
 
-        const sprite = globalClient.sprite(spriteName);
+        const sprite = globalClient!.sprite(spriteName!);
         const writeEmitter = new vscode.EventEmitter<string>();
         let shellCmd: any;
 
@@ -250,13 +338,14 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command: Delete Sprite
     const deleteSprite = vscode.commands.registerCommand('sprite.deleteSprite', async () => {
-        if (!globalClient) {
-            vscode.window.showErrorMessage('Please set API token first');
+        const ready = await ensureClient();
+        if (!ready) {
+            vscode.window.showErrorMessage('Sprite: No API token. Use "Sprites: Set API Token" first.');
             return;
         }
 
         try {
-            const sprites = await globalClient.listAllSprites();
+            const sprites = await globalClient!.listAllSprites();
             if (sprites.length === 0) {
                 vscode.window.showInformationMessage('No sprites found');
                 return;
@@ -278,17 +367,16 @@ export function activate(context: vscode.ExtensionContext) {
             );
 
             if (confirm === 'Delete') {
-                await globalClient.deleteSprite(selected.sprite.name);
-
-                const workspaceFolders = vscode.workspace.workspaceFolders || [];
-                const index = workspaceFolders.findIndex(
-                    (f: vscode.WorkspaceFolder) => f.uri.scheme === 'sprite' && f.uri.authority === selected.sprite.name
-                );
-                if (index !== -1) {
-                    vscode.workspace.updateWorkspaceFolders(index, 1);
-                }
+                await globalClient!.deleteSprite(selected.sprite.name);
 
                 vscode.window.showInformationMessage(`Sprite '${selected.sprite.name}' deleted`);
+
+                const currentFolders = vscode.workspace.workspaceFolders;
+                if (currentFolders?.length === 1 &&
+                    currentFolders[0].uri.scheme === 'sprite' &&
+                    currentFolders[0].uri.authority === selected.sprite.name) {
+                    vscode.commands.executeCommand('workbench.action.closeWindow');
+                }
             }
         } catch (error: any) {
             vscode.window.showErrorMessage(`Error: ${error.message}`);
@@ -302,7 +390,6 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Command: Download to Local
     const downloadToLocal = vscode.commands.registerCommand('sprite.downloadToLocal', async (uri?: vscode.Uri) => {
-        // Get URI from context menu or active editor
         if (!uri) {
             uri = vscode.window.activeTextEditor?.document.uri;
         }
@@ -312,7 +399,6 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        // Ask user where to save
         const isDirectory = (await vscode.workspace.fs.stat(uri)).type === vscode.FileType.Directory;
 
         let targetPath: vscode.Uri | undefined;
@@ -330,7 +416,7 @@ export function activate(context: vscode.ExtensionContext) {
         } else {
             const fileName = path.basename(uri.path);
             targetPath = await vscode.window.showSaveDialog({
-                defaultUri: vscode.Uri.file(path.join(require('os').homedir(), 'Downloads', fileName)),
+                defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads', fileName)),
                 saveLabel: 'Download'
             });
         }
