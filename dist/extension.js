@@ -1149,6 +1149,64 @@ var SpriteFileSystemProvider = class {
 var globalClient = null;
 var spriteFs = new SpriteFileSystemProvider();
 var initPromise = null;
+function createSpritePty(spriteName) {
+  const sprite = globalClient.sprite(spriteName);
+  const writeEmitter = new vscode2.EventEmitter();
+  let shellCmd;
+  return {
+    onDidWrite: writeEmitter.event,
+    open: async (initialDimensions) => {
+      writeEmitter.fire(`Connecting to sprite: ${spriteName}\r
+`);
+      try {
+        shellCmd = sprite.spawn("bash", ["-l"], {
+          tty: true,
+          rows: initialDimensions?.rows || 24,
+          cols: initialDimensions?.columns || 80
+        });
+        shellCmd.stdout?.on("data", (data) => {
+          writeEmitter.fire(data.toString());
+        });
+        shellCmd.stderr?.on("data", (data) => {
+          writeEmitter.fire(data.toString());
+        });
+        shellCmd.on("exit", () => {
+          writeEmitter.fire("\r\n[Disconnected]\r\n");
+        });
+      } catch (error) {
+        writeEmitter.fire(`\r
+Error: ${error.message}\r
+`);
+      }
+    },
+    close: () => {
+      if (shellCmd) {
+        shellCmd.kill();
+      }
+    },
+    handleInput: (data) => {
+      if (shellCmd?.stdin) {
+        shellCmd.stdin.write(data);
+      }
+    },
+    setDimensions: (dimensions) => {
+      if (shellCmd) {
+        shellCmd.resize(dimensions.columns, dimensions.rows);
+      }
+    }
+  };
+}
+function getSpriteName() {
+  const workspaceFolders = vscode2.workspace.workspaceFolders;
+  if (workspaceFolders?.length === 1 && workspaceFolders[0].uri.scheme === "sprite") {
+    return workspaceFolders[0].uri.authority;
+  }
+  const activeUri = vscode2.window.activeTextEditor?.document.uri;
+  if (activeUri?.scheme === "sprite") {
+    return activeUri.authority;
+  }
+  return void 0;
+}
 async function tryReadCliToken() {
   return new Promise((resolve) => {
     (0, import_child_process.execFile)("sprite", ["api", "/v1/sprites", "-v"], {
@@ -1231,6 +1289,33 @@ function activate(context) {
         vscode2.commands.executeCommand("sprite.openTerminal");
       }
     });
+  }
+  context.subscriptions.push(
+    vscode2.window.registerTerminalProfileProvider("sprite.terminal", {
+      async provideTerminalProfile(token) {
+        if (initPromise) {
+          await initPromise;
+        }
+        const spriteName = getSpriteName();
+        if (!spriteName || !globalClient) {
+          return void 0;
+        }
+        return new vscode2.TerminalProfile({
+          name: `Sprite: ${spriteName}`,
+          pty: createSpritePty(spriteName)
+        });
+      }
+    })
+  );
+  if (folders?.length === 1 && folders[0].uri.scheme === "sprite") {
+    const platformMap = {
+      "darwin": "osx",
+      "linux": "linux",
+      "win32": "windows"
+    };
+    const platform = platformMap[process.platform] || "linux";
+    const config = vscode2.workspace.getConfiguration("terminal.integrated");
+    config.update(`defaultProfile.${platform}`, "Sprite", vscode2.ConfigurationTarget.Workspace);
   }
   const setToken = vscode2.commands.registerCommand("sprite.setToken", async () => {
     const token = await vscode2.window.showInputBox({
@@ -1339,17 +1424,7 @@ function activate(context) {
       vscode2.window.showErrorMessage('Sprite: No API token. Use "Sprites: Set API Token" first.');
       return;
     }
-    let spriteName;
-    const workspaceFolders = vscode2.workspace.workspaceFolders;
-    if (workspaceFolders?.length === 1 && workspaceFolders[0].uri.scheme === "sprite") {
-      spriteName = workspaceFolders[0].uri.authority;
-    }
-    if (!spriteName) {
-      const activeUri = vscode2.window.activeTextEditor?.document.uri;
-      if (activeUri?.scheme === "sprite") {
-        spriteName = activeUri.authority;
-      }
-    }
+    let spriteName = getSpriteName();
     if (!spriteName) {
       const sprites = await globalClient.listAllSprites();
       if (sprites.length === 0) {
@@ -1365,54 +1440,9 @@ function activate(context) {
       }
       spriteName = selected.sprite.name;
     }
-    const sprite = globalClient.sprite(spriteName);
-    const writeEmitter = new vscode2.EventEmitter();
-    let shellCmd;
-    const pty = {
-      onDidWrite: writeEmitter.event,
-      open: async (initialDimensions) => {
-        writeEmitter.fire(`Connecting to sprite: ${spriteName}\r
-`);
-        try {
-          shellCmd = sprite.spawn("bash", ["-l"], {
-            tty: true,
-            rows: initialDimensions?.rows || 24,
-            cols: initialDimensions?.columns || 80
-          });
-          shellCmd.stdout?.on("data", (data) => {
-            writeEmitter.fire(data.toString());
-          });
-          shellCmd.stderr?.on("data", (data) => {
-            writeEmitter.fire(data.toString());
-          });
-          shellCmd.on("exit", () => {
-            writeEmitter.fire("\r\n[Disconnected]\r\n");
-          });
-        } catch (error) {
-          writeEmitter.fire(`\r
-Error: ${error.message}\r
-`);
-        }
-      },
-      close: () => {
-        if (shellCmd) {
-          shellCmd.kill();
-        }
-      },
-      handleInput: (data) => {
-        if (shellCmd?.stdin) {
-          shellCmd.stdin.write(data);
-        }
-      },
-      setDimensions: (dimensions) => {
-        if (shellCmd) {
-          shellCmd.resize(dimensions.columns, dimensions.rows);
-        }
-      }
-    };
     const terminal = vscode2.window.createTerminal({
       name: `Sprite: ${spriteName}`,
-      pty
+      pty: createSpritePty(spriteName)
     });
     terminal.show();
   });

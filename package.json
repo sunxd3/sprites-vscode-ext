@@ -29,6 +29,14 @@
       { "command": "sprite.refresh", "title": "Sprites: Refresh Files" },
       { "command": "sprite.downloadToLocal", "title": "Download to Local" }
     ],
+    "terminal": {
+      "profiles": [
+        {
+          "id": "sprite.terminal",
+          "title": "Sprite"
+        }
+      ]
+    },
     "menus": {
       "commandPalette": [
         { "command": "sprite.setToken" },

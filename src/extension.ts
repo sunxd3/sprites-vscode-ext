@@ -10,6 +10,69 @@ let globalClient: SpritesClient | null = null;
 const spriteFs = new SpriteFileSystemProvider();
 let initPromise: Promise<void> | null = null;
 
+function createSpritePty(spriteName: string): vscode.Pseudoterminal {
+    const sprite = globalClient!.sprite(spriteName);
+    const writeEmitter = new vscode.EventEmitter<string>();
+    let shellCmd: any;
+
+    return {
+        onDidWrite: writeEmitter.event,
+        open: async (initialDimensions) => {
+            writeEmitter.fire(`Connecting to sprite: ${spriteName}\r\n`);
+            try {
+                shellCmd = sprite.spawn('bash', ['-l'], {
+                    tty: true,
+                    rows: initialDimensions?.rows || 24,
+                    cols: initialDimensions?.columns || 80
+                });
+
+                shellCmd.stdout?.on('data', (data: Buffer) => {
+                    writeEmitter.fire(data.toString());
+                });
+
+                shellCmd.stderr?.on('data', (data: Buffer) => {
+                    writeEmitter.fire(data.toString());
+                });
+
+                shellCmd.on('exit', () => {
+                    writeEmitter.fire('\r\n[Disconnected]\r\n');
+                });
+            } catch (error: any) {
+                writeEmitter.fire(`\r\nError: ${error.message}\r\n`);
+            }
+        },
+        close: () => {
+            if (shellCmd) {
+                shellCmd.kill();
+            }
+        },
+        handleInput: (data: string) => {
+            if (shellCmd?.stdin) {
+                shellCmd.stdin.write(data);
+            }
+        },
+        setDimensions: (dimensions: vscode.TerminalDimensions) => {
+            if (shellCmd) {
+                shellCmd.resize(dimensions.columns, dimensions.rows);
+            }
+        }
+    };
+}
+
+function getSpriteName(): string | undefined {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders?.length === 1 && workspaceFolders[0].uri.scheme === 'sprite') {
+        return workspaceFolders[0].uri.authority;
+    }
+
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri?.scheme === 'sprite') {
+        return activeUri.authority;
+    }
+
+    return undefined;
+}
+
 /**
  * Try to extract the API token from the Sprites CLI by running
  * `sprite api /v1/sprites -v` and parsing the Authorization header from
@@ -117,6 +180,35 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.commands.executeCommand('sprite.openTerminal');
             }
         });
+    }
+
+    // Register terminal profile provider so "Sprite" appears in the terminal dropdown
+    context.subscriptions.push(
+        vscode.window.registerTerminalProfileProvider('sprite.terminal', {
+            async provideTerminalProfile(token: vscode.CancellationToken): Promise<vscode.TerminalProfile | undefined> {
+                if (initPromise) { await initPromise; }
+                const spriteName = getSpriteName();
+                if (!spriteName || !globalClient) {
+                    return undefined;
+                }
+                return new vscode.TerminalProfile({
+                    name: `Sprite: ${spriteName}`,
+                    pty: createSpritePty(spriteName)
+                });
+            }
+        })
+    );
+
+    // Set Sprite as the default terminal profile when in a sprite workspace
+    if (folders?.length === 1 && folders[0].uri.scheme === 'sprite') {
+        const platformMap: Record<string, string> = {
+            'darwin': 'osx',
+            'linux': 'linux',
+            'win32': 'windows'
+        };
+        const platform = platformMap[process.platform] || 'linux';
+        const config = vscode.workspace.getConfiguration('terminal.integrated');
+        config.update(`defaultProfile.${platform}`, 'Sprite', vscode.ConfigurationTarget.Workspace);
     }
 
     // Command: Set API Token
@@ -249,19 +341,7 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        let spriteName: string | undefined;
-
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (workspaceFolders?.length === 1 && workspaceFolders[0].uri.scheme === 'sprite') {
-            spriteName = workspaceFolders[0].uri.authority;
-        }
-
-        if (!spriteName) {
-            const activeUri = vscode.window.activeTextEditor?.document.uri;
-            if (activeUri?.scheme === 'sprite') {
-                spriteName = activeUri.authority;
-            }
-        }
+        let spriteName = getSpriteName();
 
         if (!spriteName) {
             const sprites = await globalClient!.listAllSprites();
@@ -281,57 +361,9 @@ export function activate(context: vscode.ExtensionContext) {
             spriteName = selected.sprite.name;
         }
 
-        const sprite = globalClient!.sprite(spriteName!);
-        const writeEmitter = new vscode.EventEmitter<string>();
-        let shellCmd: any;
-
-        const pty: vscode.Pseudoterminal = {
-            onDidWrite: writeEmitter.event,
-            open: async (initialDimensions) => {
-                writeEmitter.fire(`Connecting to sprite: ${spriteName}\r\n`);
-
-                try {
-                    shellCmd = sprite.spawn('bash', ['-l'], {
-                        tty: true,
-                        rows: initialDimensions?.rows || 24,
-                        cols: initialDimensions?.columns || 80
-                    });
-
-                    shellCmd.stdout?.on('data', (data: Buffer) => {
-                        writeEmitter.fire(data.toString());
-                    });
-
-                    shellCmd.stderr?.on('data', (data: Buffer) => {
-                        writeEmitter.fire(data.toString());
-                    });
-
-                    shellCmd.on('exit', () => {
-                        writeEmitter.fire('\r\n[Disconnected]\r\n');
-                    });
-                } catch (error: any) {
-                    writeEmitter.fire(`\r\nError: ${error.message}\r\n`);
-                }
-            },
-            close: () => {
-                if (shellCmd) {
-                    shellCmd.kill();
-                }
-            },
-            handleInput: (data: string) => {
-                if (shellCmd?.stdin) {
-                    shellCmd.stdin.write(data);
-                }
-            },
-            setDimensions: (dimensions: vscode.TerminalDimensions) => {
-                if (shellCmd) {
-                    shellCmd.resize(dimensions.columns, dimensions.rows);
-                }
-            }
-        };
-
         const terminal = vscode.window.createTerminal({
             name: `Sprite: ${spriteName}`,
-            pty
+            pty: createSpritePty(spriteName!)
         });
         terminal.show();
     });
